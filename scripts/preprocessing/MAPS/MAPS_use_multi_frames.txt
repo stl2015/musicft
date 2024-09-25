@@ -1,0 +1,56 @@
+
+jukebox generate npy files: 40 hours for 30000 piece
+
+8. prep training tar files
+
+a. keep 3-dim npy files (1, T=fixed, 4800) => need to use fixed T for uniform input iif batch > 1
+
+b. try batch = 1 and use longer gradient_accumulation_steps, 4 times slower though.
+   as a return we can deal with input with variable time length => is it better
+
+python scripts/preprocessing/create_tar_data.py --input-dir datasets/MAPS/prep_tars --output-dir datasets/MAPS/tars
+
+
+9. training
+
+llamav2.py: T + # text tokens should be < 4096 (llama2) or 8192 (llama3)
+
+train for 3 epoch ~ 6000 steps 
+
+train for 1 epoch first (due to batch=1): loss start from 2+ => 0.85 (50% data) =>  0.92(100% data)
+
+update transformers and torch for llama3
+
+python -m m2t.train --model_name_or_path meta-llama/Meta-Llama-3-8B-Instruct --output_dir checkpoint/meta-llama --gradient_checkpointing False --per_device_train_batch_size 1 --gradient_accumulation_steps 16 --learning_rate 5e-5 --freeze_backbone False --tune_mm_mlp_adapter True --save_total_limit 1 --mm_use_audio_start_end --bf16 True --tf32 True --lr_scheduler_type "cosine" --warmup_ratio 0.03 --weight_decay 0. --max_steps 2000 --model_max_length 2048 --save_strategy steps --save_steps 1000 --logging_steps 1 --ddp_find_unused_parameters False --train_data_path datasets/MAPS/jukebox_multi_tars --mm_hidden_size 4800
+
+=== check if the loss function has been correctly implemented ===
+
+... inferfence
+
+in main_untils.py: get_acts_from_file does not need to take time average anymore.
+
+...     if model_args.freeze_backbone:
+option to tune projector only
+
+=== infer ===
+
+1. check temperature
+2. load jukebox once 
+
+
+
+==== idea for pre-train projector ====
+
+1/ use simple piece with simple labels to pre-train => leave annotation to annotate_dataset.py 
+
+2/ use long piece to sft. consider adjust the llm response
+
+25 sec piece => 253 audio length after pool average by 10 => or roughly 10 arrays / second
+
+
+==== new idea ====
+
+3/ alternatively, we can use wav2midi (maman) + annotation (Madmom) to generate MIDI and annotation, 
+as input for LLM to generate a summary.
+
+4/ as a follow-up, we can use the midi to search for existing pieces (RAG)

@@ -1,0 +1,19 @@
+Below is a JSON-formatted dictionary. Use the "notes" field in the JSON dictionary, which is a nested JSON dictionary. The keys in "notes" represent individual instruments, and the values is a JSON list representing all of the notes played by that instrument in the music clip. 
+Each element in the value JSON list represents one note played in the music, and includes the following keys:
+- start: the start time of the note, in seconds
+- end: the end time of the note, in seconds
+- pitch: the pitch and octave of the note
+
+In addition to these fields, the JSON also contains the following special annotations:
+- tempo_in_beats_per_minute_madmom: the tempo of the track in beats per minute (BPM).
+- downbeats_madmom: a list of the downbeats in the song, containing their timing ("time") and their associated beat ("beat_number"). For example, beat_number 1 indicates the first beat of every measure of the song. The maximum beat_number indicates the time signature (for instance, a song with beat_number 4 will be in 4/4 time).
+- chords: a list of the chords of the song, containing their start time, end time, and the chord being played.
+- key: the key of the song.
+
+Only use "notes" field.
+
+Please write a summary as required below:
+-	If there are no more than 3 pitches, describe the pitches in order without mentioning the time they appear.
+-	If there are more than 3 pitches, provide a simple summary without listing all of them.
+-	Do not specifically reference the provided metadata in the response
+-	Do not add extra description

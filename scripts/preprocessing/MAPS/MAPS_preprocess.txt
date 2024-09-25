@@ -1,0 +1,151 @@
+0. download all files 
+
+1. combine midi files
+
+python scripts/preprocessing/jsonify_dataset.py --dataset MAPS --input-dir datasets --output-dir tmp/ --split all
+
+python -m scripts.preprocessing.jsonify_dataset --dataset MAPS --input-dir datasets --output-dir tmp/ --split all
+
+[INFO] number of MIDI files =  29880 for training
+[INFO] test = AkPnBcht/MUS
+
+2. annotate all wav files
+
+move all wav files under the same directory (MAPS_wav_files)
+
+python -m scripts.preprocessing.annotate_dataset --dataset-name MAPS --input-file datasets/MAPS/MAPS-train-all.json --audio-dir datasets/MAPS_wav_dir --output-dir datasets/MAPS --runner DirectRunner --max-audio-duration-seconds 10800
+
+only 4744 wave files get annotated (with the four attributes)
+
+=> find unprocessed and run again (individual test found some can be processed)
+=> because many files are shorter than 25 sec
+
+=> combined has 29880 records
+
+3. crop wav files into 25 sec chunks
+
+python -m scripts.preprocessing.crop_audio --input-dir datasets/MAPS_wav_dir_copy --output-dir datasets/MAPS_wav_crop --runner DirectRunner --multicrop
+
+2283 files > 25 sec; most are shorter than 25 sec
+
+31896 files in total including < 25 sec files
+
+4. annotate cropped wav files 
+
+python -m scripts.preprocessing.crop_annotations --annotations-dir datasets/MAPS_ann/ --output datasets/MAPS/MAPS-train-crop-annotation.jsonl --audio-dir datasets/MAPS_wav_crop/ --dataset-name MAPS | tee MAPS_ann_crop.log
+
+5. generate instruct files with notes only
+
+python -m scripts.openai.fetch_openai_instruct_data --data-source datasets/MAPS/MAPS-train-crop-annotation.jsonl --dataset-name MAPS --prompt-type notes_captioning --runner DirectRunner --output-path datasets/MAPS/notes-caption
+
+6. generate embeddings for cropped wav files using clap
+
+# note in musicnet, the resampling is not done in Linux due to unavailable 
+# original raw 44100 samplerate is kept
+# this might lead to inaccuracy in audio embedding
+# according def load_audio_input():
+
+    # load the waveform of the shape (T,), should resample to 48000
+
+# Lambda Lab has addressed the issue (4/21/2024). (However it seems only on some A10 not H100.)
+# we can resample the data for musicnet and MAPS, and combine them for training
+# llama3 8B is available now, FT with it
+
+python -m scripts.clap.clap_embeddings --input-dir datasets/MAPS_wav_crop --output-dir datasets/MAPS/clap-train --ckpt-file jukebox/music_audioset_epoch_15_esc_90.14.pt --runner DirectRunner | tee clap_train.log 
+
+audio_features[0]['waveform'] is [48000, 3] dim => https://stackoverflow.com/questions/62904089/soundfile-imports-audio-in-two-different-formats
+
+tldr: soundfile.read() => 2d is mono format; 1d is stereo format
+
+take average for processing
+
+7. prep npy and jsonl files 
+
+8. prep training data tar files
+
+python scripts/preprocessing/create_tar_data.py --input-dir datasets/MAPS/prep_tars --output-dir datasets/MAPS/tars
+
+=== for jukebox ===
+
+use last layer currently => choose mid layer later for possible better performance.
+take mean pooling over time axis
+
+9. train 
+
+# step = 2000 (* 4 * 4 ~ 32000)
+
+### llama3: upgrade transformers, torch, 
+###         use "ignore_mismatched_sizes=True," in from_pretrained
+### set gradient_checkpointing to False to avoid error in torch
+
+python -m m2t.train --model_name_or_path meta-llama/Meta-Llama-3-8B-Instruct --output_dir checkpoint/meta-llama --gradient_checkpointing False --per_device_train_batch_size 4 --gradient_accumulation_steps 4 --learning_rate 5e-5 --freeze_backbone False --tune_mm_mlp_adapter True --save_total_limit 1 --mm_use_audio_start_end --bf16 True --tf32 True --lr_scheduler_type "cosine" --warmup_ratio 0.03 --weight_decay 0. --max_steps 2000 --model_max_length 2048 --save_strategy steps --save_steps 500 --logging_steps 1 --ddp_find_unused_parameters False --train_data_path datasets/MAPS/tars --mm_hidden_size 512
+
+for jukebox: mm_hidden_size = 4800
+
+10. web server
+ 
+python -m app.padawanai_web
+
+The following issues occurs in fetching llama3 based models
+
+issue 1:
+
+### to use clap: transformers==4.30.0 => 4.36.0? not working for clap
+### 4.30.0: KeyError: 'lm_head.weight' in load pretrained model => need more recent version
+### 4.31.0: works in loading pretrained model, but fail clap in a key "text_branch.embeddings.position_ids"
+### update: https://github.com/LAION-AI/CLAP/pull/118/files/b058932653cf36325b23b996d17e473e4c655c34#diff-578abd469677f99656565d5cb0491b2714926f9099b5e7073c78321e408e1bee
+
+issue 2:
+
+for old version of transformers
+
+ValueError: Can't find a checkpoint index (pytorch_model.bin.index.json) in checkpoint/meta-llama/.
+
+.local/lib/python3.10/site-packages/transformers/utils/__init__.py
+
+WEIGHTS_INDEX_NAME = "pytorch_model.bin.index.json" => "model.safetensors.index.json"
+
+issue 3:
+
+load safetensors => for the model_dict 
+
+        with safe_open(os.path.join(folder, shard_file), framework='torch') as f:
+            # Load the tensors
+            state_dict = {key: f.get_tensor(key) for key in f.keys()}
+        
+        # Convert bfloat16 tensors to float32
+        for key, tensor in state_dict.items():
+            if tensor.dtype == torch.bfloat16:
+                state_dict[key] = tensor.to(dtype=torch.float32)
+
+
+pip install accelerate -U
+
+
+
+    model = self._shared_model_handle.acquire(
+  File "/home/ubuntu/.local/lib/python3.10/site-packages/apache_beam/utils/shared.py", line 305, in acquire
+    return _shared_map.acquire(self._key, constructor_fn, tag)
+  File "/home/ubuntu/.local/lib/python3.10/site-packages/apache_beam/utils/shared.py", line 246, in acquire
+    result = control_block.acquire(constructor_fn, tag)
+  File "/home/ubuntu/.local/lib/python3.10/site-packages/apache_beam/utils/shared.py", line 139, in acquire
+    result = constructor_fn()
+  File "/home/ubuntu/.local/lib/python3.10/site-packages/apache_beam/ml/inference/base.py", line 834, in load
+    model = self._model_handler.load_model()
+  File "/home/ubuntu/musicai/jukebox/dataflow_inference.py", line 131, in load_model
+    rank, local_rank, device = setup_dist_from_mpi()
+  File "/home/ubuntu/musicai/jukebox/utils/dist_utils.py", line 46, in setup_dist_from_mpi
+    return _setup_dist_from_mpi(master_addr, backend, port, n_attempts, verbose)
+  File "/home/ubuntu/musicai/jukebox/utils/dist_utils.py", line 86, in _setup_dist_from_mpi
+    dist.init_process_group(backend=backend, init_method=f"env://")
+  File "/home/ubuntu/musicai/jukebox/utils/dist_adapter.py", line 61, in init_process_group
+    return _init_process_group(backend, init_method)
+  File "/home/ubuntu/musicai/jukebox/utils/dist_adapter.py", line 86, in _init_process_group
+    return dist.init_process_group(backend, init_method)
+  File "/home/ubuntu/.local/lib/python3.10/site-packages/torch/distributed/c10d_logger.py", line 75, in wrapper
+    return func(*args, **kwargs)
+  File "/home/ubuntu/.local/lib/python3.10/site-packages/torch/distributed/c10d_logger.py", line 89, in wrapper
+    func_return = func(*args, **kwargs)
+  File "/home/ubuntu/.local/lib/python3.10/site-packages/torch/distributed/distributed_c10d.py", line 1257, in init_process_group
+    raise ValueError("trying to initialize the default process group twice!")
+ValueError: trying to initialize the default process group twice! [while running 'Run Jukebox Inference/BeamML_RunInference']

@@ -1,0 +1,23 @@
+torch>=1.13.0
+librosa
+cython>=0.29.35
+# transformers==4.30.0 # for using clap embedding
+# pip install -U "transformers==4.36.0" --upgrade # for using mixtral
+transformers
+# datasets==2.10.1
+datasets
+webdataset
+black
+scipy
+google-cloud-storage==2.10.0
+git+https://github.com/CPJKU/madmom.git
+# dill==0.3.1.1
+dill
+numpy
+pandas
+ffmpeg-python
+beautifulsoup4
+msgspec
+sentencepiece
+note_seq
+einops
